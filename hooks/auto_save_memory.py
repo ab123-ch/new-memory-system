@@ -131,6 +131,184 @@ except ImportError:
         except:
             pass
 
+# ========== HTTP API 调用（替代 OpenCode CLI） ==========
+
+import urllib.request
+import urllib.error
+
+# 配置缓存
+_llm_config_cache = None
+
+def _load_llm_config():
+    """加载 model_config.yaml 的 LLM 配置"""
+    global _llm_config_cache
+    if _llm_config_cache is not None:
+        return _llm_config_cache
+
+    # 尝试多个路径查找配置文件
+    config_paths = [
+        _MEMORY_SYSTEM_PATH / "model_config.yaml",  # MCP 安装目录
+        Path.home() / ".claude" / "mcp" / "memory-system" / "model_config.yaml",
+        Path(__file__).parent.parent / "model_config.yaml",
+    ]
+
+    for config_path in config_paths:
+        if config_path and config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = yaml.safe_load(f) or {}
+                _llm_config_cache = config.get("llm", {})
+                log(f"加载 LLM 配置: {config_path}")
+                return _llm_config_cache
+            except Exception as e:
+                log(f"配置文件读取失败: {config_path}, {e}")
+
+    log("未找到 model_config.yaml，使用默认配置")
+    _llm_config_cache = {}
+    return _llm_config_cache
+
+def _get_llm_settings():
+    """获取 LLM 调用参数"""
+    config = _load_llm_config()
+    return {
+        "api_key": config.get("api_key", ""),
+        "model": config.get("model", "glm-4-flash"),
+        "base_url": config.get("base_url", ""),
+        "temperature": config.get("temperature", 0.3),
+        "max_tokens": config.get("max_tokens", 2000),
+    }
+
+def _get_api_url(base_url: str) -> str:
+    """获取 API URL"""
+    if base_url:
+        return base_url
+    # 智谱默认 URL
+    return "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+
+LLM_API_TIMEOUT = 30  # 秒
+
+def call_llm_http(prompt: str) -> str:
+    """
+    通过 HTTP API 调用 LLM
+
+    Args:
+        prompt: 提示词
+
+    Returns:
+        模型返回的文本，失败返回 None
+    """
+    settings = _get_llm_settings()
+    api_key = settings.get("api_key", "")
+    model = settings.get("model", "glm-4-flash")
+    base_url = settings.get("base_url", "")
+    temperature = settings.get("temperature", 0.3)
+    max_tokens = settings.get("max_tokens", 2000)
+
+    if not api_key:
+        log("API Key 未配置，请检查 model_config.yaml")
+        return None
+
+    api_url = _get_api_url(base_url)
+
+    body = json.dumps({
+        "model": model,
+        "messages": [{"role": "user", "content": prompt}],
+        "temperature": temperature,
+        "max_tokens": max_tokens
+    }).encode("utf-8")
+
+    req = urllib.request.Request(
+        api_url,
+        data=body,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json"
+        }
+    )
+
+    try:
+        log(f"调用 LLM HTTP API ({model})...")
+        with urllib.request.urlopen(req, timeout=LLM_API_TIMEOUT) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            content = data["choices"][0]["message"]["content"]
+            log(f"API 返回成功，长度: {len(content)}")
+            return content
+    except urllib.error.HTTPError as e:
+        err_body = e.read().decode("utf-8", errors="replace")[:200]
+        log(f"API HTTP 错误: {e.code} {err_body}")
+        return None
+    except Exception as e:
+        log(f"API 调用失败: {e}")
+        return None
+
+def analyze_session_with_http(session: Dict) -> Dict:
+    """
+    通过 HTTP API 分析会话
+
+    Args:
+        session: 会话数据
+
+    Returns:
+        分析结果字典
+    """
+    conversations = session.get("conversations", [])
+    conv_texts = []
+    for conv in conversations:
+        role = conv.get("role", "")
+        content = conv.get("content", "")
+        if content:
+            prefix = "用户" if role == "user" else "助手"
+            conv_texts.append(f"{prefix}: {content[:500]}")
+
+    if not conv_texts:
+        return _fallback_session_analysis(session)
+
+    combined = "\n\n".join(conv_texts[:30])  # 最多30条
+    if len(combined) > 8000:
+        combined = combined[:8000] + "\n\n...(内容已截断)"
+
+    prompt = f"""请深度分析以下会话内容，提取关键信息用于记忆索引。
+
+会话内容:
+{combined}
+
+请输出 JSON 格式:
+{{
+    "tasks_done": ["1. 完成了xxx功能", "2. 解决了xxx问题"],
+    "user_questions": ["用户提出的核心问题1", "用户提出的核心问题2"],
+    "solutions": ["解决方案要点1", "解决方案要点2"],
+    "files_modified": ["涉及的文件或代码位置"],
+    "reusable_experience": "总结可复用的经验，下次遇到类似问题的处理建议",
+    "keywords": ["技术关键词", "业务关键词"]
+}}
+
+要求:
+1. tasks_done: 具体完成了哪些任务，用简洁的编号列表
+2. user_questions: 用户提出的核心问题或需求
+3. solutions: 模型给出的解决方案要点
+4. files_modified: 涉及修改的文件路径、类名、函数名等
+5. reusable_experience: 提炼可复用的经验，格式为"遇到X情况时，可以Y方式处理"
+6. keywords: 提取5-10个关键的技术和业务词汇
+7. 只输出 JSON，不要其他内容"""
+
+    result = call_llm_http(prompt)
+    if not result:
+        return _fallback_session_analysis(session)
+
+    # 解析 JSON 结果
+    import re
+    json_match = re.search(r'\{.*\}', result, re.DOTALL)
+    if json_match:
+        try:
+            parsed = json.loads(json_match.group())
+            parsed["session_id"] = session.get("session_id", "")
+            parsed["date"] = session.get("date", "")
+            return parsed
+        except json.JSONDecodeError:
+            pass
+
+    return _fallback_session_analysis(session)
+
 def normalize_content(content: str, max_len: int = 100) -> str:
     """标准化内容用于比较"""
     # 移除多余空白，截断
@@ -722,55 +900,41 @@ async def generate_date_index(
         if not sessions_data:
             return {"success": False, "error": "无法读取任何会话文件"}
 
-        # 调用 OpenCode 进行深度分析
-        try:
-            sys.path.insert(0, str(MEMORY_SYSTEM_PATH))
-            from memory_system.opencode_client import get_opencode_client
+        # 使用 HTTP API 进行深度分析（替代 OpenCode CLI）
+        analyzed_sessions = []
+        for session in sessions_data:
+            try:
+                analysis = analyze_session_with_http(session)
+                analyzed_sessions.append({
+                    "session_id": session.get("session_id", ""),
+                    "file_name": session.get("file_name", ""),
+                    "time_range": _get_session_time_range(session),
+                    "analysis": analysis
+                })
+            except Exception as e:
+                log(f"分析会话失败: {e}")
+                # 使用降级数据
+                analyzed_sessions.append({
+                    "session_id": session.get("session_id", ""),
+                    "file_name": session.get("file_name", ""),
+                    "time_range": _get_session_time_range(session),
+                    "analysis": _fallback_session_analysis(session)
+                })
 
-            client = get_opencode_client()
-            if not client.available:
-                log("OpenCode 不可用，使用降级方案")
-                return await _generate_fallback_index(date_dir, sessions_data, date_str)
+        # 生成 Markdown 索引
+        index_content = _build_markdown_index(date_str, analyzed_sessions)
 
-            # 对每个会话进行分析
-            analyzed_sessions = []
-            for session in sessions_data:
-                try:
-                    analysis = await client.analyze_session_memory(session)
-                    analyzed_sessions.append({
-                        "session_id": session.get("session_id", ""),
-                        "file_name": session.get("file_name", ""),
-                        "time_range": _get_session_time_range(session),
-                        "analysis": analysis
-                    })
-                except Exception as e:
-                    log(f"分析会话失败: {e}")
-                    # 使用原始数据
-                    analyzed_sessions.append({
-                        "session_id": session.get("session_id", ""),
-                        "file_name": session.get("file_name", ""),
-                        "time_range": _get_session_time_range(session),
-                        "analysis": _fallback_session_analysis(session)
-                    })
+        # 保存索引文件
+        index_file = date_dir / "index.md"
+        with open(index_file, 'w', encoding='utf-8') as f:
+            f.write(index_content)
 
-            # 生成 Markdown 索引
-            index_content = _build_markdown_index(date_str, analyzed_sessions)
-
-            # 保存索引文件
-            index_file = date_dir / "index.md"
-            with open(index_file, 'w', encoding='utf-8') as f:
-                f.write(index_content)
-
-            log(f"日期索引已生成: {index_file}")
-            return {
-                "success": True,
-                "index_file": str(index_file),
-                "sessions_count": len(analyzed_sessions)
-            }
-
-        except ImportError as e:
-            log(f"导入 OpenCode 客户端失败: {e}")
-            return await _generate_fallback_index(date_dir, sessions_data, date_str)
+        log(f"日期索引已生成: {index_file}")
+        return {
+            "success": True,
+            "index_file": str(index_file),
+            "sessions_count": len(analyzed_sessions)
+        }
 
     except Exception as e:
         log(f"生成日期索引失败: {e}")
