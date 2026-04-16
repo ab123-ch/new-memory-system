@@ -121,19 +121,20 @@ def log(msg):
 # ============== 查找会话文件 ==============
 
 def _get_active_persona():
-    """获取当前激活的人格 ID"""
+    """获取当前会话的人格 ID（按进程 PPID 查找）"""
     try:
         import importlib
         spec = importlib.util.spec_from_file_location(
             "personas",
-            SYSTEM_PATH / "memory_system" / "personas.py"
+            SYSTEM_PATH / "memory_system" / "personas" / "manager.py"
         )
         mod = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(mod)
         pm = mod.PersonaManager(str(DATA_PATH))
-        idx = pm.load_index()
-        return idx.active_persona
-    except:
+        # 使用 load_session_persona() 获取当前进程的人格
+        return pm.load_session_persona()
+    except Exception as e:
+        log(f"获取人格失败: {e}")
         return None
 
 
@@ -144,30 +145,45 @@ def find_session_file(session_id):
     Returns:
         dict with file_path, date, persona_id  or  None
     """
-    persona_id = _get_active_persona() or "ship_dev"
-    persona_dir = DATA_PATH / "personas" / persona_id
+    persona_id = _get_active_persona()
 
-    if not persona_dir.exists():
-        log(f"人格目录不存在: {persona_dir}")
-        return None
+    if persona_id:
+        # 在特定人格目录下查找
+        persona_dir = DATA_PATH / "personas" / persona_id
 
-    # 精确匹配: sess_{session_id}.yaml
-    for date_dir in sorted(persona_dir.iterdir(), reverse=True):
-        if not date_dir.is_dir() or not re.match(r'\d{4}-\d{2}-\d{2}', date_dir.name):
-            continue
-        f = date_dir / f"sess_{session_id}.yaml"
-        if f.exists():
-            log(f"精确匹配: {f}")
-            return {"file_path": f, "date": date_dir.name, "persona_id": persona_id}
+        if persona_dir.exists():
+            # 精确匹配: sess_{session_id}.yaml
+            for date_dir in sorted(persona_dir.iterdir(), reverse=True):
+                if not date_dir.is_dir() or not re.match(r'\d{4}-\d{2}-\d{2}', date_dir.name):
+                    continue
+                f = date_dir / f"sess_{session_id}.yaml"
+                if f.exists():
+                    log(f"精确匹配: {f}")
+                    return {"file_path": f, "date": date_dir.name, "persona_id": persona_id}
 
-    # 模糊匹配: 找当天最近修改的文件
-    today = datetime.now().strftime("%Y-%m-%d")
-    today_dir = persona_dir / today
-    if today_dir.exists():
-        files = sorted(today_dir.glob("sess_*.yaml"), key=lambda f: f.stat().st_mtime, reverse=True)
-        if files:
-            log(f"模糊匹配（最近文件）: {files[0]}")
-            return {"file_path": files[0], "date": today, "persona_id": persona_id}
+            # 模糊匹配: 找当天最近修改的文件
+            today = datetime.now().strftime("%Y-%m-%d")
+            today_dir = persona_dir / today
+            if today_dir.exists():
+                files = sorted(today_dir.glob("sess_*.yaml"), key=lambda f: f.stat().st_mtime, reverse=True)
+                if files:
+                    log(f"模糊匹配（最近文件）: {files[0]}")
+                    return {"file_path": files[0], "date": today, "persona_id": persona_id}
+
+    # 如果没有人格或找不到，全局搜索所有人格目录
+    log(f"在特定人格目录未找到，全局搜索: {session_id}")
+    personas_dir = DATA_PATH / "personas"
+    if personas_dir.exists():
+        for p_dir in personas_dir.iterdir():
+            if not p_dir.is_dir():
+                continue
+            for date_dir in sorted(p_dir.iterdir(), reverse=True):
+                if not date_dir.is_dir() or not re.match(r'\d{4}-\d{2}-\d{2}', date_dir.name):
+                    continue
+                f = date_dir / f"sess_{session_id}.yaml"
+                if f.exists():
+                    log(f"全局搜索找到: {f}")
+                    return {"file_path": f, "date": date_dir.name, "persona_id": p_dir.name}
 
     log(f"未找到会话文件: {session_id}")
     return None
