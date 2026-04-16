@@ -1,0 +1,51 @@
+# 经验提取提示词模板
+name: experience_extraction
+version: "1.0"
+description: 从对话中提取可复用的经验
+
+template: |
+  分析以下对话，提取可以复用的经验。
+
+  ## 对话内容
+  用户：{user_message}
+
+  AI：{assistant_response}
+
+  ## 用户反馈（如果有）
+  {user_feedback}
+
+  ## 提取要求
+
+  ### 必须包含的要素
+  1. **场景描述**：在什么情况下适用这个经验
+  2. **具体行动**：应该怎么做
+  3. **原因说明**：为什么要这样做
+
+  ### 格式示例
+  ✅ 好的经验：
+  "在处理 PDF 导出时，应避免在循环中重复构建 Report 对象。
+  原因：buildReport 会修改 documentDataMap，导致数据被污染。
+  正确做法：先克隆数据，或在方法外部构建一次后复用。"
+
+  ❌ 不好的经验：
+  "关于代码：涉及 import、方法"（过于泛化，无因果）
+  "写代码时要注意细节"（过于泛化，不可执行）
+
+  ### 质量检查
+  - 是否有具体的场景？
+  - 是否有明确的行动指导？
+  - 是否说明了原因？
+  - 是否可以在类似场景复用？
+
+  ## 输出格式（严格 JSON）
+  {{
+      "has_meaningful_content": true/false,
+      "experience": {{
+          "content": "完整的经验内容，包含场景、行动、原因",
+          "category": "coding/novel_writing/plot_design/...",
+          "confidence": 0.0-1.0
+      }},
+      "reasoning": "为什么这个经验有价值"
+  }}
+
+  如果对话内容没有可提取的有价值经验，请设置 has_meaningful_content 为 false。

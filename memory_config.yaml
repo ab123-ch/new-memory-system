@@ -1,0 +1,58 @@
+# AI记忆系统配置文件
+# Memory System Configuration
+
+storage:
+  path: ./data/memory
+
+# 向量存储配置（可选功能）
+vector:
+  enabled: true
+  provider: chroma  # chroma, faiss, none
+  persist_path: ./data/vectors
+  embedding:
+    provider: zhipu  # zhipu, openai, sentence_transformers, none
+    model: embedding-3  # 智谱嵌入模型
+    # 对于 OpenAI: text-embedding-3-small
+    # 对于智谱: embedding-3
+    dimensions: 1024
+
+# AI 增强功能配置（可选）
+ai:
+  enabled: true
+  llm:
+    provider: zhipu  # zhipu, openai, anthropic, ollama, none
+    model: glm-4-flash  # 智谱模型（注意：glm-5 返回空内容，使用 glm-4-flash）
+    # api_key 从环境变量读取: ZHIPU_API_KEY 或 OPENAI_API_KEY
+    # base_url: https://open.bigmodel.cn/api/paas/v4/
+    temperature: 0.3
+    max_tokens: 500
+  summarization:
+    enabled: true
+    max_length: 200
+  keyword_extraction:
+    enabled: true
+    max_keywords: 10
+
+# 记忆优化配置
+optimization:
+  enabled: true
+  llm:
+    provider: zhipu
+    model: glm-4-flash  # 使用 glm-4-flash（glm-5 返回空内容）
+    temperature: 0.2  # 更低的温度确保输出稳定
+    max_tokens: 1000  # 规则提取可能需要更多 token
+  reorganization:
+    min_cluster_size: 3  # 最小聚类大小
+    max_content_length: 8000  # 发送给 LLM 的最大内容长度
+
+# 自动保存配置
+auto_save:
+  enabled: true
+  immediate: true  # 立即保存到 YAML
+  index_to_vector: true  # 异步索引到向量库
+  debounce_seconds: 2  # 防抖延迟
+
+# 日志配置
+logging:
+  level: INFO
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"

@@ -1,0 +1,26 @@
+# 模型配置文件模板
+# Model Configuration Template for Memory System
+# 复制此文件为 model_config.yaml 并填入你的 API Key
+
+# LLM 配置（用于摘要、关键词提取等 AI 功能）
+llm:
+  provider: zhipu  # zhipu, openai, anthropic, ollama, mock
+  model: glm-4-flash  # 注意：glm-5 返回空内容，使用 glm-4-flash
+  api_key: ""  # 填入你的 API Key
+  base_url: ""  # 可选，自定义 API 地址
+  temperature: 0.3
+  max_tokens: 500
+
+# Embedding 配置（用于向量检索）
+embedding:
+  provider: zhipu  # zhipu, openai, sentence_transformers, mock
+  model: embedding-3
+  api_key: ""  # 填入你的 API Key，留空则使用 llm.api_key
+  base_url: ""
+  dimensions: 1024
+
+# 备用配置（可选）
+fallback:
+  # 如果主配置不可用，尝试备用
+  llm_provider: mock
+  embedding_provider: mock

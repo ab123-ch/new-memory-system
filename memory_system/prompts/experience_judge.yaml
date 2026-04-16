@@ -1,0 +1,54 @@
+# 经验判断提示词模板
+name: experience_judge
+version: "1.0"
+description: 判断如何处理新提取的经验
+
+template: |
+  你是一个经验管理专家。请分析以下情况，判断如何处理新提取的经验。
+
+  ## 会话上下文
+  - 用户消息：{user_message}
+  - AI 回复摘要：{ai_response_summary}
+  - 用户反馈：{user_feedback}
+
+  ## 现有经验（如果有）
+  {existing_experience}
+
+  ## 新提取的经验
+  {new_experience}
+
+  ## 判断任务
+
+  请分析以下问题：
+
+  1. **经验是否在会话中使用？**
+     - AI 是否参考了现有经验？
+     - AI 的回复是否体现了现有经验的内容？
+
+  2. **经验是否有效？**
+     - 如果用户有反馈，反馈是正面还是负面？
+     - 用户是否指出了问题？
+     - 经验是否帮助 AI 做出了正确的决策？
+
+  3. **经验是否需要补充？**
+     - 新经验是否提供了现有经验没有的信息？
+     - 现有经验是否需要更新或增强？
+
+  ## 输出格式（严格 JSON）
+
+  {{
+      "was_used_in_session": true/false,
+      "was_effective": true/false,
+      "user_satisfied": true/false/null,
+      "action": "add" | "merge" | "skip" | "replace" | "enhance",
+      "reason": "详细说明判断原因",
+      "merged_content": "如果 action=merge/enhance，提供合并/增强后的完整内容",
+      "confidence": 0.0-1.0
+  }}
+
+  ## Action 说明
+  - add: 作为新经验添加
+  - merge: 与现有经验合并
+  - skip: 跳过，不需要添加
+  - replace: 替换现有经验
+  - enhance: 增强现有经验（添加新信息）
