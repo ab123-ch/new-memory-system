@@ -25,9 +25,56 @@ from datetime import datetime
 
 # ============== 配置 ==============
 
-ZHIPU_API_KEY = "a89b9abd85bb46b6840f072fe4d3f635.kXHdpaSNxbzpE2a0"
-ZHIPU_API_URL = "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-ZHIPU_MODEL = "glm-4-flash"  # 免费模型，速度快
+# 从 model_config.yaml 读取配置（避免硬编码）
+_config_cache = None
+
+def _load_model_config():
+    """加载 model_config.yaml 配置"""
+    global _config_cache
+    if _config_cache is not None:
+        return _config_cache
+
+    # 尝试多个路径查找配置文件
+    config_paths = [
+        Path(__file__).parent.parent / "model_config.yaml",  # MCP 安装目录
+        Path.home() / ".claude" / "mcp" / "memory-system" / "model_config.yaml",
+    ]
+
+    for config_path in config_paths:
+        if config_path.exists():
+            try:
+                with open(config_path, "r", encoding="utf-8") as f:
+                    config = yaml.safe_load(f) or {}
+                _config_cache = config
+                log(f"加载配置文件: {config_path}")
+                return config
+            except Exception as e:
+                log(f"配置文件读取失败: {config_path}, {e}")
+
+    # 未找到配置文件，使用默认值
+    log("未找到 model_config.yaml，使用默认配置")
+    _config_cache = {}
+    return _config_cache
+
+def _get_llm_config():
+    """获取 LLM 配置"""
+    config = _load_model_config()
+    llm = config.get("llm", {})
+    return {
+        "api_key": llm.get("api_key", ""),
+        "model": llm.get("model", "glm-4-flash"),
+        "base_url": llm.get("base_url", ""),
+        "temperature": llm.get("temperature", 0.3),
+        "max_tokens": llm.get("max_tokens", 2000),
+    }
+
+def _get_api_url(base_url: str) -> str:
+    """获取 API URL"""
+    if base_url:
+        return base_url
+    # 智谱默认 URL
+    return "https://open.bigmodel.cn/api/paas/v4/chat/completions"
+
 API_TIMEOUT = 30  # 秒
 
 
@@ -138,24 +185,40 @@ def call_zhipu(prompt):
     Returns:
         str 或 None
     """
+    # 从配置文件读取 LLM 配置
+    llm_config = _get_llm_config()
+    api_key = llm_config.get("api_key", "")
+    model = llm_config.get("model", "glm-4-flash")
+    base_url = llm_config.get("base_url", "")
+    temperature = llm_config.get("temperature", 0.3)
+    max_tokens = llm_config.get("max_tokens", 2000)
+
+    # 检查 API Key
+    if not api_key:
+        log("API Key 未配置，请检查 model_config.yaml")
+        return None
+
+    # 获取 API URL
+    api_url = _get_api_url(base_url)
+
     body = json.dumps({
-        "model": ZHIPU_MODEL,
+        "model": model,
         "messages": [{"role": "user", "content": prompt}],
-        "temperature": 0.3,
-        "max_tokens": 2000
+        "temperature": temperature,
+        "max_tokens": max_tokens
     }).encode("utf-8")
 
     req = urllib.request.Request(
-        ZHIPU_API_URL,
+        api_url,
         data=body,
         headers={
-            "Authorization": f"Bearer {ZHIPU_API_KEY}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json"
         }
     )
 
     try:
-        log(f"调用智谱 API ({ZHIPU_MODEL})...")
+        log(f"调用 API ({model})...")
         with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
             data = json.loads(resp.read().decode("utf-8"))
             content = data["choices"][0]["message"]["content"]
