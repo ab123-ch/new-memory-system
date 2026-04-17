@@ -259,15 +259,16 @@ async def generate_daily_summary(date_str: str, persona_id: str = None) -> Dict:
         }
     """
     storage = get_persona_storage_path(persona_id)
-    memory_file = storage / f"{date_str[:7]}" / f"{date_str}.yaml"
 
-    if not memory_file.exists():
+    # 新版目录结构: personas/{persona_id}/{date}/sess_xxx.yaml
+    date_dir = storage / date_str
+
+    if not date_dir.exists():
         return {"date": date_str, "summary": "无记忆", "topics": [], "keywords": []}
 
-    data = load_memory_file(memory_file)
-    sessions = data.get("sessions", [])
-
-    if not sessions:
+    # 读取该日期下所有会话文件
+    session_files = [f for f in date_dir.glob("sess_*.yaml")]
+    if not session_files:
         return {"date": date_str, "summary": "无会话", "topics": [], "keywords": []}
 
     # 汇总所有会话的摘要和关键词
@@ -275,43 +276,42 @@ async def generate_daily_summary(date_str: str, persona_id: str = None) -> Dict:
     all_keywords = set()
     topics = []
 
-    for session in sessions:
-        summary = session.get("summary", "")
+    for session_file in session_files:
+        data = load_memory_file(session_file)
+        summary = data.get("summary", "")
         if summary:
             all_summaries.append(summary)
 
-        keywords = session.get("keywords", [])
+        keywords = data.get("keywords", [])
         all_keywords.update(keywords)
 
-        # 提取主题
-        topic = {
-            "session_id": session.get("session_id"),
+        topics.append({
+            "session_id": session_file.stem,
             "summary": summary,
             "keywords": keywords[:5]
-        }
-        topics.append(topic)
+        })
 
     # 生成整体摘要
     if all_summaries:
         combined = "\n".join([f"- {s}" for s in all_summaries])
-        daily_summary = f"今日主要工作 ({len(sessions)} 个会话):\n{combined}"
+        daily_summary = f"今日主要工作 ({len(session_files)} 个会话):\n{combined}"
     else:
-        daily_summary = f"今日有 {len(sessions)} 个会话，无摘要"
+        daily_summary = f"今日有 {len(session_files)} 个会话，无摘要"
 
     result = {
         "date": date_str,
         "summary": daily_summary,
         "topics": topics,
         "keywords": list(all_keywords),
-        "session_count": len(sessions)
+        "session_count": len(session_files)
     }
 
     # 缓存结果
     cache_key = f"{persona_id or 'default'}_{date_str}"
     _daily_summaries[cache_key] = result
 
-    # 保存到文件
-    index_file = storage / f"{date_str[:7]}" / f"{date_str}.index.yaml"
+    # 保存到文件（与日期目录同级）
+    index_file = date_dir / "index.yaml"
     save_memory_file(index_file, result)
 
     return result
