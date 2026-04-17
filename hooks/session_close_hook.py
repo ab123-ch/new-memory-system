@@ -5,10 +5,10 @@
 功能：
 1. 接收 Claude Code SessionEnd Hook 的 JSON 输入
 2. 根据 session_id 查找记忆文件
-3. 读取文件内容，调用智谱 API 分析总结
+3. 读取文件内容，调用 LLM API 分析总结
 4. 在日期目录下生成/更新 index.md
 
-不依赖 opencode CLI，直接用 urllib 调智谱 HTTP API。
+通过 hooks/llm_utils.py 调用 LLM，支持所有 OpenAI 兼容 API 的提供商。
 """
 
 import sys
@@ -17,65 +17,12 @@ import json
 import re
 import yaml
 import traceback
-import urllib.request
-import urllib.error
+import importlib.util
 from pathlib import Path
 from datetime import datetime
 
-
-# ============== 配置 ==============
-
-# 从 model_config.yaml 读取配置（避免硬编码）
-_config_cache = None
-
-def _load_model_config():
-    """加载 model_config.yaml 配置"""
-    global _config_cache
-    if _config_cache is not None:
-        return _config_cache
-
-    # 尝试多个路径查找配置文件
-    config_paths = [
-        Path(__file__).parent.parent / "model_config.yaml",  # MCP 安装目录
-        Path.home() / ".claude" / "mcp" / "memory-system" / "model_config.yaml",
-    ]
-
-    for config_path in config_paths:
-        if config_path.exists():
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    config = yaml.safe_load(f) or {}
-                _config_cache = config
-                log(f"加载配置文件: {config_path}")
-                return config
-            except Exception as e:
-                log(f"配置文件读取失败: {config_path}, {e}")
-
-    # 未找到配置文件，使用默认值
-    log("未找到 model_config.yaml，使用默认配置")
-    _config_cache = {}
-    return _config_cache
-
-def _get_llm_config():
-    """获取 LLM 配置"""
-    config = _load_model_config()
-    llm = config.get("llm", {})
-    return {
-        "api_key": llm.get("api_key", ""),
-        "model": llm.get("model", "glm-4-flash"),
-        "base_url": llm.get("base_url", ""),
-        "temperature": llm.get("temperature", 0.3),
-        "max_tokens": llm.get("max_tokens", 2000),
-    }
-
-def _get_api_url(base_url: str) -> str:
-    """获取 API URL"""
-    if base_url:
-        return base_url
-    # 智谱默认 URL
-    return "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-
-API_TIMEOUT = 30  # 秒
+# 导入通用 LLM 工具
+from llm_utils import call_llm
 
 
 # ============== 路径检测 ==============
@@ -189,64 +136,8 @@ def find_session_file(session_id):
     return None
 
 
-# ============== 智谱 API 调用 ==============
-
-def call_zhipu(prompt):
-    """
-    调用智谱 API，返回模型输出文本
-
-    Args:
-        prompt: 用户提示词
-
-    Returns:
-        str 或 None
-    """
-    # 从配置文件读取 LLM 配置
-    llm_config = _get_llm_config()
-    api_key = llm_config.get("api_key", "")
-    model = llm_config.get("model", "glm-4-flash")
-    base_url = llm_config.get("base_url", "")
-    temperature = llm_config.get("temperature", 0.3)
-    max_tokens = llm_config.get("max_tokens", 2000)
-
-    # 检查 API Key
-    if not api_key:
-        log("API Key 未配置，请检查 model_config.yaml")
-        return None
-
-    # 获取 API URL
-    api_url = _get_api_url(base_url)
-
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
-        "max_tokens": max_tokens
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        api_url,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-    )
-
-    try:
-        log(f"调用 API ({model})...")
-        with urllib.request.urlopen(req, timeout=API_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"]
-            log(f"API 返回成功，长度: {len(content)}")
-            return content
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")[:200]
-        log(f"API HTTP 错误: {e.code} {err_body}")
-        return None
-    except Exception as e:
-        log(f"API 调用失败: {e}")
-        return None
+# ============== LLM 调用 ==============
+# 使用 hooks/llm_utils.py 中的 call_llm 函数，支持所有 OpenAI 兼容 API 提供商
 
 
 # ============== 分析会话 ==============
@@ -316,8 +207,8 @@ def analyze_session(conversations, time_range):
 
     prompt = ANALYSIS_PROMPT.format(time_range=time_range, content=combined)
 
-    # 调 API
-    result = call_zhipu(prompt)
+    # 调 LLM API（通过 llm_utils 通用模块，支持所有 provider）
+    result = call_llm(prompt)
     if result:
         return result
 

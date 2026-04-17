@@ -39,6 +39,9 @@ import yaml
 
 import importlib.util
 
+# 导入通用 LLM 工具
+from llm_utils import call_llm
+
 # 直接导入新保存函数（同目录下）
 from session_saver_v2 import save_session_to_file
 
@@ -131,115 +134,7 @@ except ImportError:
         except:
             pass
 
-# ========== HTTP API 调用（替代 OpenCode CLI） ==========
-
-import urllib.request
-import urllib.error
-
-# 配置缓存
-_llm_config_cache = None
-
-def _load_llm_config():
-    """加载 model_config.yaml 的 LLM 配置"""
-    global _llm_config_cache
-    if _llm_config_cache is not None:
-        return _llm_config_cache
-
-    # 尝试多个路径查找配置文件
-    config_paths = [
-        _MEMORY_SYSTEM_PATH / "model_config.yaml",  # MCP 安装目录
-        Path.home() / ".claude" / "mcp" / "memory-system" / "model_config.yaml",
-        Path(__file__).parent.parent / "model_config.yaml",
-    ]
-
-    for config_path in config_paths:
-        if config_path and config_path.exists():
-            try:
-                with open(config_path, "r", encoding="utf-8") as f:
-                    config = yaml.safe_load(f) or {}
-                _llm_config_cache = config.get("llm", {})
-                log(f"加载 LLM 配置: {config_path}")
-                return _llm_config_cache
-            except Exception as e:
-                log(f"配置文件读取失败: {config_path}, {e}")
-
-    log("未找到 model_config.yaml，使用默认配置")
-    _llm_config_cache = {}
-    return _llm_config_cache
-
-def _get_llm_settings():
-    """获取 LLM 调用参数"""
-    config = _load_llm_config()
-    return {
-        "api_key": config.get("api_key", ""),
-        "model": config.get("model", "glm-4-flash"),
-        "base_url": config.get("base_url", ""),
-        "temperature": config.get("temperature", 0.3),
-        "max_tokens": config.get("max_tokens", 2000),
-    }
-
-def _get_api_url(base_url: str) -> str:
-    """获取 API URL"""
-    if base_url:
-        return base_url
-    # 智谱默认 URL
-    return "https://open.bigmodel.cn/api/paas/v4/chat/completions"
-
-LLM_API_TIMEOUT = 30  # 秒
-
-def call_llm_http(prompt: str) -> str:
-    """
-    通过 HTTP API 调用 LLM
-
-    Args:
-        prompt: 提示词
-
-    Returns:
-        模型返回的文本，失败返回 None
-    """
-    settings = _get_llm_settings()
-    api_key = settings.get("api_key", "")
-    model = settings.get("model", "glm-4-flash")
-    base_url = settings.get("base_url", "")
-    temperature = settings.get("temperature", 0.3)
-    max_tokens = settings.get("max_tokens", 2000)
-
-    if not api_key:
-        log("API Key 未配置，请检查 model_config.yaml")
-        return None
-
-    api_url = _get_api_url(base_url)
-
-    body = json.dumps({
-        "model": model,
-        "messages": [{"role": "user", "content": prompt}],
-        "temperature": temperature,
-        "max_tokens": max_tokens
-    }).encode("utf-8")
-
-    req = urllib.request.Request(
-        api_url,
-        data=body,
-        headers={
-            "Authorization": f"Bearer {api_key}",
-            "Content-Type": "application/json"
-        }
-    )
-
-    try:
-        log(f"调用 LLM HTTP API ({model})...")
-        with urllib.request.urlopen(req, timeout=LLM_API_TIMEOUT) as resp:
-            data = json.loads(resp.read().decode("utf-8"))
-            content = data["choices"][0]["message"]["content"]
-            log(f"API 返回成功，长度: {len(content)}")
-            return content
-    except urllib.error.HTTPError as e:
-        err_body = e.read().decode("utf-8", errors="replace")[:200]
-        log(f"API HTTP 错误: {e.code} {err_body}")
-        return None
-    except Exception as e:
-        log(f"API 调用失败: {e}")
-        return None
+# ========== LLM 调用（通过 llm_utils 通用模块，支持所有 provider） ==========
 
 def analyze_session_with_http(session: Dict) -> Dict:
     """
@@ -291,7 +186,7 @@ def analyze_session_with_http(session: Dict) -> Dict:
 6. keywords: 提取5-10个关键的技术和业务词汇
 7. 只输出 JSON，不要其他内容"""
 
-    result = call_llm_http(prompt)
+    result = call_llm(prompt)
     if not result:
         return _fallback_session_analysis(session)
 
